@@ -41,6 +41,15 @@ func (s *Server) calibrate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"calibration_revision": revision})
 }
 
+func (s *Server) confirmSpec(w http.ResponseWriter, r *http.Request) {
+	value, err := s.plant.ConfirmSpec()
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, value)
+}
+
 func (s *Server) routeProduct(w http.ResponseWriter, r *http.Request) {
 	var input routeRequest
 	if err := decodeJSON(r, &input); err != nil {

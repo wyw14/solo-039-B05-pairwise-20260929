@@ -11,6 +11,7 @@ func (s *Server) routes() {
 	s.router.Get("/api/incidents", s.incidents)
 	s.router.Post("/api/campaign/start", s.start)
 	s.router.Post("/api/campaign/transition", s.transition)
+	s.router.Post("/api/campaign/confirm-spec", s.confirmSpec)
 	s.router.Post("/api/analyzer/samples", s.sample)
 	s.router.Post("/api/analyzer/calibrate", s.calibrate)
 	s.router.Post("/api/products/route", s.routeProduct)

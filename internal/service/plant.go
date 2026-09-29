@@ -160,6 +160,7 @@ func (p *Plant) Transition(ctx context.Context, grade, source string) (model.Cam
 	p.Column.SetFeedRevision(p.Feed.Current.Revision)
 	p.FeedMetrics.Record(source)
 	p.Analyzer.BindFeed(p.Feed.Current.Revision)
+	campaign.CompleteTransition(p.Campaign)
 	if err := p.record("campaign.transition", grade); err != nil {
 		p.fail(err)
 		return model.Campaign{}, err
@@ -183,20 +184,37 @@ func (p *Plant) CalibrateAnalyzer() uuid.UUID {
 	return revision
 }
 
+func (p *Plant) ConfirmSpec() (model.Campaign, error) {
+	before := p.Campaign.Snapshot()
+	proof, err := analyzer.DefaultQuality().Proof(p.Analyzer, before.Revision.String())
+	if err != nil {
+		return before, err
+	}
+	next, err := campaign.AdvanceChecked(p.Campaign, model.OnSpec)
+	if err != nil {
+		return before, err
+	}
+	_ = p.Evidence.Add(proof)
+	p.CampaignHistory.Record(before, next, "stabilization confirmed on-spec")
+	if err := p.record("campaign.on-spec", before.Revision.String()); err != nil {
+		p.fail(err)
+		return model.Campaign{}, err
+	}
+	return next, nil
+}
+
 func (p *Plant) RouteProduct(target string) error {
 	current := p.Campaign.Snapshot()
 	proof, ok := p.Analyzer.Proof(current.Revision)
 	if !ok {
 		return errors.New("composition evidence is incomplete")
 	}
-	_ = p.Evidence.Add(proof)
 	pressureProof := model.Proof{ID: uuid.New(), Revision: current.Revision, Source: "column-pressure", Digest: fmt.Sprintf("%.3f", p.Column.Snapshot().Pressure), Durable: true, Independent: true, At: time.Now().Unix()}
-	permit := p.Interlock.Evaluate([]model.Proof{proof, pressureProof}, model.Campaign{ID: current.ID, Revision: current.Revision, Phase: model.OnSpec, Epoch: current.Epoch, Fencing: current.Fencing})
+	permit := p.Interlock.Evaluate([]model.Proof{proof, pressureProof}, current)
 	if err := permit.Error(); err != nil {
 		return err
 	}
-	current.Phase = model.OnSpec
-	campaign.Restore(p.Campaign, current)
+	_ = p.Evidence.Add(proof)
 	plan := model.ProductPlan{Campaign: current.ID, Revision: current.Revision, Grade: current.Grade, Target: target}
 	if err := p.Product.PublishWithProof(plan, proof); err != nil {
 		p.ProductAudit.Record(plan, proof, false, err.Error())
