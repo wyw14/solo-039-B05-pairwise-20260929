@@ -21,14 +21,18 @@ func NewCoordinator(c *campaign.State, a *analyzer.State, j *journal.Store) *Coo
 }
 
 func (c *Coordinator) Publish(plan model.ProductPlan) error {
-	if plan.Campaign != c.Campaign.Snapshot().ID {
+	snapshot := c.Campaign.Snapshot()
+	if plan.Campaign != snapshot.ID {
 		return errors.New("campaign mismatch")
+	}
+	if !campaign.CanRoute(snapshot) {
+		return errors.New("campaign is not confirmed on-spec")
 	}
 	proof, ok := c.Analyzer.Proof(plan.Revision)
 	if !ok {
 		return errors.New("composition proof incomplete")
 	}
-	if err := journal.PersistProof(c.Journal, proof, c.Campaign.Snapshot()); err != nil {
+	if err := journal.PersistProof(c.Journal, proof, snapshot); err != nil {
 		return err
 	}
 	c.proof = proof
@@ -43,13 +47,17 @@ func (c *Coordinator) Recover(plan model.ProductPlan) error {
 }
 
 func (c *Coordinator) PublishWithProof(plan model.ProductPlan, proof model.Proof) error {
-	if plan.Campaign != c.Campaign.Snapshot().ID {
+	snapshot := c.Campaign.Snapshot()
+	if plan.Campaign != snapshot.ID {
 		return errors.New("campaign mismatch")
+	}
+	if !campaign.CanRoute(snapshot) {
+		return errors.New("campaign is not confirmed on-spec")
 	}
 	if proof.Revision != plan.Revision || proof.Digest == "" {
 		return errors.New("proof does not match product revision")
 	}
-	if err := journal.PersistProof(c.Journal, proof, c.Campaign.Snapshot()); err != nil {
+	if err := journal.PersistProof(c.Journal, proof, snapshot); err != nil {
 		return err
 	}
 	c.proof = proof

@@ -185,18 +185,35 @@ func (p *Plant) CalibrateAnalyzer() uuid.UUID {
 
 func (p *Plant) RouteProduct(target string) error {
 	current := p.Campaign.Snapshot()
-	proof, ok := p.Analyzer.Proof(current.Revision)
-	if !ok {
-		return errors.New("composition evidence is incomplete")
+	switch current.Phase {
+	case model.OnSpec:
+		// 批次已真正达标，正常产品路由可以执行。
+	case model.Stabilizing:
+		// 批次仍在稳定确认阶段：必须先凭真实证据确认稳定，
+		// 不能因为放行请求就直接改判为达标。
+	default:
+		return errors.New("campaign phase does not permit product release")
+	}
+
+	quality := analyzer.DefaultQuality()
+	proof, err := quality.Proof(p.Analyzer, current.Revision.String())
+	if err != nil {
+		return fmt.Errorf("composition evidence is incomplete: %w", err)
 	}
 	_ = p.Evidence.Add(proof)
+
+	if current.Phase == model.Stabilizing {
+		current, err = campaign.AdvanceChecked(p.Campaign, model.OnSpec)
+		if err != nil {
+			return err
+		}
+	}
+
 	pressureProof := model.Proof{ID: uuid.New(), Revision: current.Revision, Source: "column-pressure", Digest: fmt.Sprintf("%.3f", p.Column.Snapshot().Pressure), Durable: true, Independent: true, At: time.Now().Unix()}
-	permit := p.Interlock.Evaluate([]model.Proof{proof, pressureProof}, model.Campaign{ID: current.ID, Revision: current.Revision, Phase: model.OnSpec, Epoch: current.Epoch, Fencing: current.Fencing})
+	permit := p.Interlock.Evaluate([]model.Proof{proof, pressureProof}, current)
 	if err := permit.Error(); err != nil {
 		return err
 	}
-	current.Phase = model.OnSpec
-	campaign.Restore(p.Campaign, current)
 	plan := model.ProductPlan{Campaign: current.ID, Revision: current.Revision, Grade: current.Grade, Target: target}
 	if err := p.Product.PublishWithProof(plan, proof); err != nil {
 		p.ProductAudit.Record(plan, proof, false, err.Error())
